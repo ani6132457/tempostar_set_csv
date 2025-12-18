@@ -1,92 +1,87 @@
 import streamlit as st
 import pandas as pd
 import io
+import re
 
-st.set_page_config(page_title="SKU 並び替えツール", layout="wide")
+st.set_page_config(page_title="SKU 並び替えツール（貼り付け版）", layout="wide")
+st.title("SKU 並び替えツール（貼り付け入力版）")
 
-st.title("SKU 並び替えツール（VBA → Web/Python）")
-
-st.markdown("""
-- 親貼り付け：SKUコード一覧（1列目にSKU）
-- 子貼り付け：照合用SKU一覧（1列目にSKU）
-- 出力：Sheet3相当（セット商品区分 / SKUコード / セット個数）
-""")
-
-# =========
-# UI
-# =========
 mode = st.radio(
     "処理モード",
     ["通常版（ama- と _ を削除して照合）", "cp版（_cp を削除して照合）"],
     horizontal=True
 )
 
-col1, col2 = st.columns(2)
-with col1:
-    parent_file = st.file_uploader("親貼り付け（CSV / Excel）", type=["csv", "xlsx"])
-with col2:
-    child_file = st.file_uploader("子貼り付け（CSV / Excel）", type=["csv", "xlsx"])
+st.caption("ExcelからA列をコピーして、そのまま貼り付けOK（改行 / タブ / カンマを自動判定）")
 
-encoding = st.selectbox("CSV文字コード（CSVのとき）", ["cp932", "utf-8-sig", "utf-8"], index=0)
+c1, c2 = st.columns(2)
+with c1:
+    parent_text = st.text_area("親貼り付け（SKU一覧）", height=320, placeholder="例:\nama-7986600_setX11Y11\nama-7986601_setX11Y12\n...")
+with c2:
+    child_text = st.text_area("子貼り付け（照合用SKU一覧）", height=320, placeholder="例:\n7986600setX11Y11\n7986601setX11Y12\n...")
 
-# =========
-# helpers
-# =========
-def read_table(uploaded, encoding: str) -> pd.DataFrame:
-    if uploaded is None:
-        return None
-    name = uploaded.name.lower()
-    if name.endswith(".csv"):
-        return pd.read_csv(uploaded, encoding=encoding)
-    else:
-        return pd.read_excel(uploaded)
+btn = st.button("実行", type="primary")
+
+def extract_first_column_values(text: str) -> list[str]:
+    """
+    Excelから貼り付けたテキストを想定し、行ごとに「1列目だけ」を取り出す。
+    区切り：タブ / カンマ / 複数スペース に対応（最初に見つかった区切りでsplit）
+    """
+    if not text:
+        return []
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip() != ""]
+    out = []
+    for ln in lines:
+        # まずタブ優先（Excelコピーはほぼタブ）
+        if "\t" in ln:
+            first = ln.split("\t")[0].strip()
+        # 次にカンマ（CSV貼り付けっぽい場合）
+        elif "," in ln:
+            first = ln.split(",")[0].strip()
+        else:
+            # スペースが混ざっていても、先頭トークンをSKUとみなす
+            first = re.split(r"\s+", ln, maxsplit=1)[0].strip()
+        if first:
+            out.append(first)
+    return out
 
 def normalize_sku(sku1: str, mode: str) -> str:
-    if sku1 is None:
-        return ""
     sku1 = str(sku1).strip()
     if mode.startswith("通常版"):
-        # ama- と _ を削除
-        sku2 = sku1.replace("ama-", "").replace("_", "")
-        return sku2
+        return sku1.replace("ama-", "").replace("_", "")
     else:
-        # _cp を削除
-        sku2 = sku1.replace("_cp", "")
-        return sku2
+        return sku1.replace("_cp", "")
 
-# =========
-# run
-# =========
-if parent_file and child_file:
-    parent_df = read_table(parent_file, encoding)
-    child_df = read_table(child_file, encoding)
+if btn:
+    parent_skus = extract_first_column_values(parent_text)
+    child_skus_list = extract_first_column_values(child_text)
+    child_skus = set(child_skus_list)
 
-    if parent_df is None or child_df is None:
-        st.error("ファイルの読み込みに失敗しました。")
+    if not parent_skus:
+        st.error("親貼り付けが空です。")
         st.stop()
-
-    # 1列目をSKU列として扱う（VBAと同じ）
-    parent_skus = parent_df.iloc[:, 0].astype(str).fillna("").str.strip()
-    child_skus = set(child_df.iloc[:, 0].astype(str).fillna("").str.strip().tolist())
+    if not child_skus:
+        st.error("子貼り付けが空です。")
+        st.stop()
 
     out_rows = []
     for sku1 in parent_skus:
-        if not sku1:
-            continue
-
         sku2 = normalize_sku(sku1, mode)
-
         if sku2 in child_skus:
-            # VBAの出力と同じ：1行目(区分=1, sku1)、2行目(区分=2, sku2, 個数=1)
             out_rows.append({"セット商品区分": 1, "SKUコード": sku1, "セット個数": ""})
             out_rows.append({"セット商品区分": 2, "SKUコード": sku2, "セット個数": 1})
 
     out_df = pd.DataFrame(out_rows, columns=["セット商品区分", "SKUコード", "セット個数"])
 
-    st.subheader("結果プレビュー（Sheet3相当）")
+    st.subheader("結果（Sheet3相当）")
     st.dataframe(out_df, use_container_width=True, height=520)
 
-    # ダウンロード（CSV）
+    # そのままコピーできるTSV（Excelに貼りやすい）
+    st.subheader("コピー用（Excel貼り付けOK）")
+    tsv = out_df.fillna("").astype(str).to_csv(sep="\t", index=False)
+    st.text_area("下を全選択してコピー → Excelへ貼り付け", tsv, height=180)
+
+    # CSVダウンロード
     csv_buf = io.StringIO()
     out_df.to_csv(csv_buf, index=False, encoding="utf-8-sig")
     st.download_button(
@@ -95,5 +90,5 @@ if parent_file and child_file:
         file_name="sheet3_output.csv",
         mime="text/csv",
     )
-else:
-    st.info("親貼り付け・子貼り付けのファイルを両方アップロードしてください。")
+
+    st.success(f"完了：一致件数 {len(out_df)//2} セット（出力行数 {len(out_df)}）")
