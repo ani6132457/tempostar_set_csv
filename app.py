@@ -83,11 +83,11 @@ if btn:
 
     # CSVダウンロード
     csv_buf = io.StringIO()
-    out_df.to_csv(csv_buf, index=False, encoding="utf-8-sig")
+    out_df.to_csv(csv_buf, index=False, encoding="cp932")
     st.download_button(
-        label="結果をCSVでダウンロード（UTF-8-SIG）",
-        data=csv_buf.getvalue().encode("utf-8-sig"),
-        file_name="sheet3_output.csv",
+        label="結果をCSVでダウンロード（Shift-JIS）",
+        data=csv_buf.getvalue().encode("cp932"),
+        file_name="set_shift-jis.csv",
         mime="text/csv",
     )
 
